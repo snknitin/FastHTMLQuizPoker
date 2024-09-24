@@ -1,358 +1,226 @@
-from fastapi import FastAPI
-from fasthtml import fasthtml
-import uvicorn
+# import json
+#
+from fasthtml.common import *
+# from collections import deque
 import random
 import string
-import asyncio
-import json
+# import asyncio
+#
+# app = FastHTML(ws_hdr=True, live=True)
 
-app = FastAPI()
 
-# Game state
+app,rt = fast_app(live=True)
+
 rooms = {}
-
-# WebSocket connections
-connections = {}
-
+users = {}
 
 def generate_room_code():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
-
-@app.get("/")
-@fasthtml
-async def index():
-    return """
-    <html>
-        <head>
-            <title>Quiz Game</title>
-        </head>
-        <body>
-            <h1>Welcome to the Quiz Game</h1>
-            <button @click="create_room">Create Room as QM</button>
-            <div>
-                <input type="text" :value="room_id" @input="room_id = $event.target.value" placeholder="Enter Room ID">
-                <input type="text" :value="team_name" @input="team_name = $event.target.value" placeholder="Enter Team Name">
-                <button @click="join_room">Join Room</button>
-            </div>
-            <script>
-                fasthtml.setup({
-                    data: {
-                        room_id: '',
-                        team_name: ''
-                    },
-                    methods: {
-                        create_room: function() {
-                            fetch('/create_room', {method: 'POST'})
-                                .then(response => response.json())
-                                .then(data => window.location.href = `/qm/${data.room}`);
-                        },
-                        join_room: function() {
-                            if (this.room_id && this.team_name) {
-                                localStorage.setItem('team', this.team_name);
-                                window.location.href = `/team/${this.room_id}`;
-                            } else {
-                                alert('Please enter both Room ID and Team Name');
-                            }
-                        }
-                    }
-                });
-            </script>
-        </body>
-    </html>
-    """
+def centered_div(*content):
+    return Div(*content, style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;")
 
 
-@app.get("/qm/{room}")
-@fasthtml
-async def qm_room(room: str):
-    if room not in rooms:
-        return """
-        <script>
-            window.location.href = '/';
-        </script>
-        """
-    return f"""
-    <html>
-        <head>
-            <title>Quiz Master Room</title>
-        </head>
-        <body>
-            <h1>Quiz Master Room: {room}</h1>
-            <div>
-                <select :value="selected_card" @input="selected_card = $event.target.value">
-                    <option value="">Select a card</option>
-                    <option v-for="card in cards" :value="card">{{card}}</option>
-                </select>
-                <button @click="select_card">Select Card</button>
-            </div>
-            <div>
-                <input type="number" :value="custom_time" @input="custom_time = $event.target.value" min="1">
-                <button @click="start_timer">Start Timer</button>
-                <span>{{timer}} seconds left</span>
-            </div>
-            <div>
-                <h2>Teams</h2>
-                <div v-for="(tokens, team) in teams">{{team}}: {{tokens}} tokens</div>
-            </div>
-            <div>
-                <h2>Bids</h2>
-                <div v-for="(bid, team) in bids">{{team}} bid {{bid.amount}} ({{bid.time}}s left)</div>
-            </div>
-            <button @click="get_priority">Get Priority</button>
-            <div v-if="priority_list">
-                <h2>Priority List</h2>
-                <table>
-                    <tr><th>Team</th><th>Bid</th><th>Time</th><th>Priority</th></tr>
-                    <tr v-for="(bid, index) in priority_list">
-                        <td>{{bid[0]}}</td>
-                        <td>{{bid[1].amount}}</td>
-                        <td>{{bid[1].time}}</td>
-                        <td>{{index + 1}}</td>
-                    </tr>
-                </table>
-            </div>
-            <div>
-                <select :value="winner" @input="winner = $event.target.value">
-                    <option value="no_winner">No Winner</option>
-                    <option v-for="team in Object.keys(teams)" :value="team">{{team}}</option>
-                </select>
-                <button @click="assign_winner">Assign Winner</button>
-            </div>
-            <button @click="clear_round">Clear Round</button>
-            <script>
-                fasthtml.setup({{
-                    data: {{
-                        room: '{room}',
-                        selected_card: '',
-                        custom_time: 75,
-                        timer: 75,
-                        teams: {{}},
-                        bids: {{}},
-                        priority_list: null,
-                        winner: 'no_winner',
-                        cards: ['Ace of Spades', 'King of Hearts', '10 of Diamonds', '2 of Clubs'] // Add all 52 cards here
-                    }},
-                    methods: {{
-                        select_card: function() {{
-                            fetch('/select_card', {{
-                                method: 'POST',
-                                headers: {{'Content-Type': 'application/json'}},
-                                body: JSON.stringify({{room: this.room, card: this.selected_card}})
-                            }});
-                        }},
-                        start_timer: function() {{
-                            fetch('/start_timer', {{
-                                method: 'POST',
-                                headers: {{'Content-Type': 'application/json'}},
-                                body: JSON.stringify({{room: this.room, custom_time: this.custom_time}})
-                            }});
-                        }},
-                        get_priority: function() {{
-                            fetch('/get_priority', {{
-                                method: 'POST',
-                                headers: {{'Content-Type': 'application/json'}},
-                                body: JSON.stringify({{room: this.room}})
-                            }})
-                            .then(response => response.json())
-                            .then(data => this.priority_list = data.bids);
-                        }},
-                        assign_winner: function() {{
-                            fetch('/assign_winner', {{
-                                method: 'POST',
-                                headers: {{'Content-Type': 'application/json'}},
-                                body: JSON.stringify({{room: this.room, winner: this.winner}})
-                            }});
-                        }},
-                        clear_round: function() {{
-                            fetch('/clear_round', {{
-                                method: 'POST',
-                                headers: {{'Content-Type': 'application/json'}},
-                                body: JSON.stringify({{room: this.room}})
-                            }});
-                        }}
-                    }}
-                }});
 
-                const eventSource = new EventSource('/sse/{room}');
-                eventSource.onmessage = function(event) {{
-                    const data = JSON.parse(event.data);
-                    Object.assign(fasthtml.$data, data);
-                }};
-            </script>
-        </body>
-    </html>
-    """
+# @rt('/')
+# def get(): return Div(P('Hello World 2!'), hx_get="/change")
+
+@rt('/change')
+def get(): return P('RoomCode is ' + generate_room_code())
 
 
-@app.get("/team/{room}")
-@fasthtml
-async def team_room(room: str):
-    if room not in rooms:
-        return """
-        <script>
-            window.location.href = '/';
-        </script>
-        """
-    return f"""
-    <html>
-        <head>
-            <title>Team Room</title>
-        </head>
-        <body>
-            <h1>Team Room: {room}</h1>
-            <h2>Team: {{team}}</h2>
-            <div>Current Card: {{current_card}}</div>
-            <div>{{timer}} seconds left</div>
-            <div>
-                <h2>Teams</h2>
-                <div v-for="(tokens, team) in teams">{{team}}: {{tokens}} tokens</div>
-            </div>
-            <div>
-                <h2>Bids</h2>
-                <div v-for="(bid, team) in bids">{{team}} bid {{bid.amount}} ({{bid.time}}s left)</div>
-            </div>
-            <div>
-                <input type="number" :value="bid_amount" @input="bid_amount = $event.target.value" min="1">
-                <button @click="place_bid">Place Bid</button>
-            </div>
-            <script>
-                fasthtml.setup({{
-                    data: {{
-                        room: '{room}',
-                        team: localStorage.getItem('team'),
-                        current_card: '',
-                        timer: 75,
-                        teams: {{}},
-                        bids: {{}},
-                        bid_amount: 0
-                    }},
-                    methods: {{
-                        place_bid: function() {{
-                            fetch('/place_bid', {{
-                                method: 'POST',
-                                headers: {{'Content-Type': 'application/json'}},
-                                body: JSON.stringify({{room: this.room, team: this.team, bid: parseInt(this.bid_amount)}})
-                            }});
-                        }}
-                    }}
-                }});
 
-                const eventSource = new EventSource('/sse/{room}');
-                eventSource.onmessage = function(event) {{
-                    const data = JSON.parse(event.data);
-                    Object.assign(fasthtml.$data, data);
-                }};
-            </script>
-        </body>
-    </html>
-    """
+@rt('/')
+def homepage():
+    return Titled("Quiz Poker"), centered_div(
+        H1("Welcome to the Quiz Game"),
+        Button("Create Room", hx_post="/create_room"),
+        Form(
+            Input(name="room_id", placeholder="Enter Room ID"),
+            Input(name="team_name", placeholder="Enter Team Name"),
+            Button("Join Room", type="submit"),
+            hx_post="/join_room"
+        )
+    )
 
 
-@app.post("/create_room")
-async def create_room():
+
+@rt('/create_room')
+def create_room():
     room = generate_room_code()
-    while room in rooms:
-        room = generate_room_code()
-    rooms[room] = {"teams": {}, "current_card": None, "timer": 75, "bids": {}, "card_worth": 0}
-    return {"room": room}
+    rooms[room] = {
+        "teams": {},
+        "current_card": None,
+        "timer": 75,
+        "bids": {},
+        "card_worth": 0
+    }
+    return centered_div(
+        H2(f"Room Created: {room}"),
+        P("Share this code with your teams"),
+        A("Enter Quiz Master Room", href=f"/qm/{room}")
+    )
 
 
-@app.post("/select_card")
-async def select_card(data: dict):
-    room = data['room']
-    card = data['card']
-    if room in rooms:
-        rooms[room]['current_card'] = card
-        rooms[room]['bids'] = {}
-        rooms[room]['card_worth'] = 0
-        await broadcast(room)
+
+@rt('/join_room')
+def join_room(room_id: str, team_name: str):
+    if room_id not in rooms:
+        return centered_div(P("Room not found"))
+    if team_name in rooms[room_id]["teams"]:
+        return centered_div(P("Team name already taken"))
+    rooms[room_id]["teams"][team_name] = 300  # Initial tokens
+    return centered_div(
+        H2(f"Joined Room: {room_id}"),
+        P(f"Team: {team_name}"),
+        A("Enter Team Room", href=f"/team/{room_id}/{team_name}")
+    )
+
+@rt('/qm/{room}')
+def qm_room(room: str):
+    if room not in rooms:
+        return centered_div(P("Room not found"))
+    return Titled(f"QM Room: {room}"), centered_div(
+        H2(f"Quiz Master Room: {room}"),
+        Div(id="teams-list"),
+        Select(
+            Option("Select a card", value=""),
+            *[Option(f"{value} of {suit}") for suit in ["Hearts", "Diamonds", "Clubs", "Spades"]
+              for value in ["Ace", "2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King"]],
+            id="card-select"
+        ),
+        Button("Select Card", hx_post=f"/select_card/{room}", hx_include="#card-select"),
+        Div(
+            Input(type="number", name="custom_time", value="75", min="1"),
+            Button("Start Timer", hx_post=f"/start_timer/{room}")
+        ),
+        Div(id="timer"),
+        Div(id="bids-list"),
+        Button("Get Priority", hx_post=f"/get_priority/{room}"),
+        Div(id="priority-list"),
+        Button("Clear Round", hx_post=f"/clear_round/{room}"),
+        Div(id="game-area")
+    )
 
 
-@app.post("/start_timer")
-async def start_timer(data: dict):
-    room = data['room']
-    custom_time = data.get('custom_time', 75)
-    if room in rooms:
-        rooms[room]['timer'] = int(custom_time)
-        asyncio.create_task(run_timer(room))
-
-
-@app.post("/place_bid")
-async def place_bid(data: dict):
-    room = data['room']
-    team = data['team']
-    bid = data['bid']
-    if room in rooms and team in rooms[room]['teams']:
-        if rooms[room]['teams'][team] >= bid:
-            rooms[room]['bids'][team] = {"amount": bid, "time": rooms[room]['timer']}
-            rooms[room]['teams'][team] -= bid
-            await broadcast(room)
-        else:
-            return {"error": "Insufficient tokens"}
-
-
-@app.post("/get_priority")
-async def get_priority(data: dict):
-    room = data['room']
-    if room in rooms:
-        sorted_bids = sorted(rooms[room]['bids'].items(), key=lambda x: (-x[1]['amount'], x[1]['time']))
-        rooms[room]['card_worth'] = sum(bid['amount'] for bid in rooms[room]['bids'].values())
-        return {"bids": sorted_bids, "card_worth": rooms[room]['card_worth']}
-
-
-@app.post("/assign_winner")
-async def assign_winner(data: dict):
-    room = data['room']
-    winner = data['winner']
-    if room in rooms:
-        if winner != "no_winner":
-            rooms[room]['teams'][winner] += rooms[room]['card_worth']
-        await broadcast(room)
-
-
-@app.post("/clear_round")
-async def clear_round(data: dict):
-    room = data['room']
-    if room in rooms:
-        rooms[room]['bids'] = {}
-        rooms[room]['current_card'] = None
-        rooms[room]['card_worth'] = 0
-        rooms[room]['timer'] = 75
-        await broadcast(room)
-
-
-@app.get("/sse/{room}")
-async def sse(room: str):
-    async def event_generator():
-        if room not in connections:
-            connections[room] = set()
-        connections[room].add(asyncio.current_task())
-        try:
-            while True:
-                if room in rooms:
-                    yield f"data: {json.dumps(rooms[room])}\n\n"
-                await asyncio.sleep(1)
-        finally:
-            connections[room].remove(asyncio.current_task())
-
-    return fasthtml.streaming_response(event_generator())
-
-
-async def broadcast(room: str):
-    if room in connections:
-        for connection in connections[room]:
-            if not connection.done():
-                connection.cancel()
-
-
-async def run_timer(room: str):
-    while rooms[room]['timer'] > 0:
-        await asyncio.sleep(1)
-        rooms[room]['timer'] -= 1
-        await broadcast(room)
-    await broadcast(room)
-
+serve()
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+# @app.get('/team/{room}/{team}')
+# def team_room(room: str, team: str):
+#     if room not in rooms or team not in rooms[room]["teams"]:
+#         return centered_div(P("Invalid room or team"))
+#     return Titled(f"Team Room: {team}"), centered_div(
+#         H2(f"Team Room: {team}"),
+#         P(f"Room: {room}"),
+#         P(f"Tokens: {rooms[room]['teams'][team]}"),
+#         Div(id="current-card"),
+#         Div(id="timer"),
+#         Form(
+#             Input(type="number", name="bid", min="1"),
+#             Button("Place Bid", type="submit"),
+#             hx_post=f"/place_bid/{room}/{team}"
+#         ),
+#         Div(id="bids-list"),
+#         Div(id="game-area")
+#     )
+#
+# @app.post('/select_card/{room}')
+# def select_card(room: str, card: str):
+#     if room not in rooms:
+#         return P("Room not found")
+#     rooms[room]["current_card"] = card
+#     rooms[room]["bids"] = {}
+#     rooms[room]["card_worth"] = 0
+#     return Div(
+#         P(f"Selected Card: {card}"),
+#         _=f"htmx.trigger('#current-card', 'cardSelected', {{card: '{card}'}})"
+#     )
+#
+# @app.post('/start_timer/{room}')
+# def start_timer(room: str, custom_time: int):
+#     if room not in rooms:
+#         return P("Room not found")
+#     rooms[room]["timer"] = custom_time
+#     asyncio.create_task(run_timer(room))
+#     return P(f"Timer started: {custom_time} seconds")
+#
+# @app.post('/place_bid/{room}/{team}')
+# def place_bid(room: str, team: str, bid: int):
+#     if room not in rooms or team not in rooms[room]["teams"]:
+#         return P("Invalid room or team")
+#     if rooms[room]["teams"][team] < bid:
+#         return P("Insufficient tokens")
+#     rooms[room]["bids"][team] = bid
+#     rooms[room]["teams"][team] -= bid
+#     return Div(
+#         P(f"Bid placed: {bid}"),
+#         P(f"Tokens left: {rooms[room]['teams'][team]}"),
+#         _=f"htmx.trigger('#bids-list', 'bidPlaced', {{team: '{team}', bid: {bid}}})"
+#     )
+#
+# @app.post('/get_priority/{room}')
+# def get_priority(room: str):
+#     if room not in rooms:
+#         return P("Room not found")
+#     sorted_bids = sorted(rooms[room]["bids"].items(), key=lambda x: x[1], reverse=True)
+#     rooms[room]["card_worth"] = sum(rooms[room]["bids"].values())
+#     return Div(
+#         H3("Priority List"),
+#         Table(
+#             Tr(Th("Team"), Th("Bid"), Th("Priority")),
+#             *[Tr(Td(team), Td(bid), Td(i+1)) for i, (team, bid) in enumerate(sorted_bids)]
+#         ),
+#         P(f"Card Worth: {rooms[room]['card_worth']}")
+#     )
+#
+# @app.post('/clear_round/{room}')
+# def clear_round(room: str):
+#     if room not in rooms:
+#         return P("Room not found")
+#     rooms[room]["bids"] = {}
+#     rooms[room]["current_card"] = None
+#     rooms[room]["card_worth"] = 0
+#     rooms[room]["timer"] = 75
+#     return Div(
+#         P("Round cleared"),
+#         _="htmx.trigger('body', 'roundCleared')"
+#     )
+#
+# async def run_timer(room: str):
+#     while rooms[room]["timer"] > 0:
+#         await asyncio.sleep(1)
+#         rooms[room]["timer"] -= 1
+#         for user in users.values():
+#             await user(P(f"Time left: {rooms[room]['timer']} seconds", id="timer", hx_swap_oob="true"))
+#     for user in users.values():
+#         await user(P("Time's up!", id="timer", hx_swap_oob="true"))
+#
+# def on_connect(ws, send):
+#     users[id(ws)] = send
+#
+# def on_disconnect(ws):
+#     users.pop(id(ws), None)
+#
+# @app.ws('/ws', conn=on_connect, disconn=on_disconnect)
+# async def ws(msg: str, send):
+#     data = json.loads(msg)
+#     room = data.get('room')
+#     if room in rooms:
+#         if data.get('type') == 'cardSelected':
+#             for user in users.values():
+#                 await user(P(f"Current Card: {data['card']}", id="current-card", hx_swap_oob="true"))
+#         elif data.get('type') == 'bidPlaced':
+#             for user in users.values():
+#                 await user(Div(P(f"{data['team']} bid {data['bid']}"), id="bids-list", hx_swap_oob="innerHTML"))
+#         elif data.get('type') == 'roundCleared':
+#             for user in users.values():
+#                 await user(Div(id="bids-list", hx_swap_oob="innerHTML"))
+#                 await user(P("", id="current-card", hx_swap_oob="true"))
+#                 await user(P("75 seconds", id="timer", hx_swap_oob="true"))
+#
+# serve()
